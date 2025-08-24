@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <string.h>
+#include <string>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,11 +22,21 @@ gpio_config_t Buttons_Input = {
     .intr_type = GPIO_INTR_NEGEDGE
 };
 
-PWM_ControllerOut OutputTest(signalOutput_Pin);
+PWM_Controller OutputTest(signalOutput_Pin);
+
+pwmPattern test {
+    "Test",
+    0,
+    {{1000,1024},{1000,0}}
+};
 
 extern "C" void app_main() {
     printf("Initializing GPIOs\n\n");
     gpio_config(&Buttons_Input);
     OutputTest.init();
     gpio_dump_io_configuration(stdout, (1ULL << signalOutput_Pin)|(Buttons_Mask));
+
+    while(true){
+        OutputTest.control(&test);
+    }
 }
