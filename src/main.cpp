@@ -74,12 +74,13 @@ extern "C" void app_main() {
     OutputTest.init();
     gpio_dump_io_configuration(stdout, (1ULL << signalOutput_Pin)|(Buttons_Mask));
 
-    xTaskCreate(TaskFunction,
+    xTaskCreatePinnedToCore(TaskFunction,
         "OutputTest task",
         4096,
         (void*)&test,
         2,
-        NULL
+        NULL,
+        1
     );
 }
 
