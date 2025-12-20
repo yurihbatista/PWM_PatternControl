@@ -1,43 +1,21 @@
-#include <stdio.h>
 #include <inttypes.h>
 #include "sdkconfig.h"
-#include <string>
-#include <stdlib.h>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "driver/gpio.h"
 #include "PWM_controller.hpp"
+#include "Wifi_connection.h"
+#include "MQTT_.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
-#include "esp_system.h"
-
-#define OnOff_Pin 15
-#define switch_Pin 16
+#include "cJSON.h"
 
 #define signalOutput_Pin 9
 
-const uint64_t Buttons_Mask = (1ULL << OnOff_Pin) | (1ULL << switch_Pin);
+const char *TAG = "PWM_Control project";
 
-gpio_config_t Buttons_Input = {
-    .pin_bit_mask = Buttons_Mask,
-    .mode = GPIO_MODE_INPUT,
-    .pull_up_en = GPIO_PULLUP_ENABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_NEGEDGE
-};
 
-PWM_Controller OutputTest(signalOutput_Pin);
+PWM_Controller testObject(signalOutput_Pin);
 
-pwmPattern test {
-    "Test",
-    0,
-    {{1000,1024},{1000,0}}
-};
-
-extern "C" void TaskFunction(void *pvParameters);
-
-extern "C" void app_main() {
+extern "C" void app_main()
+{
     esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
@@ -52,41 +30,28 @@ extern "C" void app_main() {
     unsigned major_rev = chip_info.revision / 100;
     unsigned minor_rev = chip_info.revision % 100;
     printf("silicon revision v%d.%d, ", major_rev, minor_rev);
-    if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
+
+    if (esp_flash_get_size(NULL, &flash_size) != ESP_OK)
+    {
         printf("Get flash size failed");
         return;
     }
 
-    printf("%" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-           (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-
+    printf("%" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024), (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
     printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
-    for (int i = 10; i >= 0; i--) {
-        printf("Restarting in %d seconds...\n", i);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
-
-
-
-    printf("Initializing GPIOs\n\n");
-    gpio_config(&Buttons_Input);
-    OutputTest.init();
-    gpio_dump_io_configuration(stdout, (1ULL << signalOutput_Pin)|(Buttons_Mask));
-
-    xTaskCreatePinnedToCore(TaskFunction,
-        "OutputTest task",
-        4096,
-        (void*)&test,
-        2,
-        NULL,
-        1
-    );
-}
-
-extern "C" void TaskFunction(void *pvParameters){
-    for(;;){
-    OutputTest.control((pwmPattern*)pvParameters);
-    printf("Task iteration\n");
-    }
+    ESP_ERROR_CHECK(ret);
+    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    wifi_init_sta();
+    ESP_LOGI(TAG, "Wi-Fi is up.");
+    QueueHandle_t pwmQueue = testObject.init();
+    mqtt_app_start(pwmQueue);
 }

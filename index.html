@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWM Studio</title>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 15px; margin: 0; }
+        .card { background: #1e1e1e; padding: 15px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #333; }
+        button { background: #00adb5; border: none; color: white; padding: 10px 15px; border-radius: 6px; font-weight: bold; margin: 5px; cursor: pointer; }
+        button.stop { background: #ff4b2b; }
+        button.save { background: #28a745; }
+        button.delete { background: #444; font-size: 10px; padding: 5px; }
+        input { background: #2a2a2a; color: white; border: 1px solid #444; padding: 8px; border-radius: 6px; margin: 3px; }
+        .step-row { display: flex; align-items: center; justify-content: center; margin-bottom: 5px; }
+        .step-row input { width: 70px; }
+        .status { font-size: 12px; margin-bottom: 10px; color: #ffbc00; }
+        .library-item { display: flex; justify-content: space-between; align-items: center; background: #2a2a2a; padding: 10px; margin: 5px 0; border-radius: 6px; }
+        .hidden { display: none !important; }
+        h3 { margin-top: 0; color: #00adb5; }
+    </style>
+</head>
+<body>
+
+    <div id="status" class="status">Waiting for config...</div>
+
+    <!-- 1. LOGIN SECTION -->
+    <div id="settings-ui" class="card">
+        <h3>Broker Settings</h3>
+        <input type="text" id="cfg-host" placeholder="Cluster ID (abc-123.s1.eu)">
+        <input type="text" id="cfg-user" placeholder="Username">
+        <input type="password" id="cfg-pass" placeholder="Password">
+        <button onclick="saveAndConnect()">CONNECT</button>
+    </div>
+
+    <!-- 2. CONTROL & STUDIO SECTION -->
+    <div id="control-ui" class="hidden">
+        <div class="card">
+            <button onclick="sendCommand('START')">RESUME</button>
+            <button class="stop" onclick="sendCommand('STOP')">STOP</button>
+        </div>
+
+        <!-- Pattern Creator -->
+        <div class="card">
+            <h3>Pattern Creator</h3>
+            <input type="text" id="pattern-name" placeholder="Pattern Name" style="width: 80%"><br>
+            <div id="steps-list">
+                <div class="step-row">
+                    <input type="number" class="ms" placeholder="MS" value="500">
+                    <input type="number" class="duty" placeholder="Duty" value="1024">
+                    <button onclick="this.parentElement.remove()" style="background:none; color:red">X</button>
+                </div>
+            </div>
+            <button onclick="addStepRow()">+ Add Step</button>
+            <div style="margin-top:10px">
+                <button class="save" onclick="saveToLibrary()">SAVE TO LIBRARY</button>
+                <button onclick="sendToESP()">SEND TO ESP32</button>
+            </div>
+        </div>
+
+        <!-- Saved Library -->
+        <div class="card">
+            <h3>Saved Library</h3>
+            <div id="library-container">
+                <!-- Patterns will appear here -->
+            </div>
+        </div>
+        
+        <button onclick="clearAllData()" style="background:none; color:#666; font-size:10px">Reset Dashboard</button>
+    </div>
+
+    <script>
+        let client = null;
+        let library = JSON.parse(localStorage.getItem('pwm_library')) || {};
+
+        window.onload = () => {
+            renderLibrary();
+            if(localStorage.getItem('mqtt_host')) connectToMQTT();
+        };
+
+        // --- MQTT LOGIC ---
+        function saveAndConnect() {
+            localStorage.setItem('mqtt_host', document.getElementById('cfg-host').value);
+            localStorage.setItem('mqtt_user', document.getElementById('cfg-user').value);
+            localStorage.setItem('mqtt_pass', document.getElementById('cfg-pass').value);
+            connectToMQTT();
+        }
+
+        function connectToMQTT() {
+            const hostId = localStorage.getItem('mqtt_host');
+            client = mqtt.connect(`wss://${hostId}.hivemq.cloud:8884/mqtt`, {
+                username: localStorage.getItem('mqtt_user'),
+                password: localStorage.getItem('mqtt_pass'),
+                clientId: 'web_' + Math.random().toString(16).substr(2, 6)
+            });
+
+            client.on('connect', () => {
+                document.getElementById('status').innerText = 'Connected ✅';
+                document.getElementById('status').style.color = '#00ff00';
+                document.getElementById('settings-ui').classList.add('hidden');
+                document.getElementById('control-ui').classList.remove('hidden');
+            });
+        }
+
+        function sendCommand(cmd) { client.publish('esp32/pwm_control', JSON.stringify({ "cmd": cmd })); }
+
+        // --- PATTERN STUDIO LOGIC ---
+        function addStepRow(ms = 500, duty = 1024) {
+            const row = document.createElement('div');
+            row.className = 'step-row';
+            row.innerHTML = `<input type="number" class="ms" value="${ms}"> <input type="number" class="duty" value="${duty}"> <button onclick="this.parentElement.remove()" style="background:none; color:red">X</button>`;
+            document.getElementById('steps-list').appendChild(row);
+        }
+
+        function getPatternFromUI() {
+            const steps = [];
+            const msInputs = document.querySelectorAll('.ms');
+            const dutyInputs = document.querySelectorAll('.duty');
+            msInputs.forEach((el, i) => {
+                steps.push({ ms: parseInt(el.value), duty: parseInt(dutyInputs[i].value) });
+            });
+            return {
+                cmd: "SET",
+                name: document.getElementById('pattern-name').value || "Unnamed",
+                steps: steps
+            };
+        }
+
+        function sendToESP() {
+            const pattern = getPatternFromUI();
+            client.publish('esp32/pwm_control', JSON.stringify(pattern));
+        }
+
+        // --- LIBRARY LOGIC (localStorage) ---
+        function saveToLibrary() {
+            const pattern = getPatternFromUI();
+            if (pattern.name === "Unnamed") { alert("Please name your pattern"); return; }
+            library[pattern.name] = pattern.steps;
+            localStorage.setItem('pwm_library', JSON.stringify(library));
+            renderLibrary();
+        }
+
+        function loadPattern(name) {
+            document.getElementById('pattern-name').value = name;
+            document.getElementById('steps-list').innerHTML = ''; // Clear UI
+            library[name].forEach(step => addStepRow(step.ms, step.duty));
+        }
+
+        function deletePattern(name) {
+            delete library[name];
+            localStorage.setItem('pwm_library', JSON.stringify(library));
+            renderLibrary();
+        }
+
+        function renderLibrary() {
+            const container = document.getElementById('library-container');
+            container.innerHTML = '';
+            Object.keys(library).forEach(name => {
+                const item = document.createElement('div');
+                item.className = 'library-item';
+                item.innerHTML = `
+                    <span onclick="loadPattern('${name}')" style="cursor:pointer">${name}</span>
+                    <div>
+                        <button onclick="sendStoredPattern('${name}')">SEND</button>
+                        <button class="delete" onclick="deletePattern('${name}')">DEL</button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function sendStoredPattern(name) {
+            const payload = { cmd: "SET", name: name, steps: library[name] };
+            client.publish('esp32/pwm_control', JSON.stringify(payload));
+        }
+
+        function clearAllData() { localStorage.clear(); location.reload(); }
+    </script>
+</body>
+</html>
