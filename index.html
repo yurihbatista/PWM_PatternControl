@@ -187,19 +187,46 @@
         }
 
         function importManualJson() {
-            try {
-                const parsed = JSON.parse(document.getElementById('manual-json').value);
-                if (!parsed.name || !Array.isArray(parsed.steps)) throw new Error("Format invalid");
-                
-                library[parsed.name] = parsed.steps;
-                localStorage.setItem('pwm_library', JSON.stringify(library));
-                renderLibrary();
-                document.getElementById('manual-json').value = '';
-                alert(`Imported: ${parsed.name}`);
-            } catch (e) {
-                alert("Invalid JSON. Ensure it has 'name' and 'steps' array.");
+    try {
+        const rawInput = document.getElementById('manual-json').value.trim();
+        if (!rawInput) return alert("Please paste JSON first.");
+
+        const parsed = JSON.parse(rawInput);
+        
+        // Helper to import a single pattern object
+        const addPatternToLibrary = (item) => {
+            if (item.name && Array.isArray(item.steps)) {
+                library[item.name] = item.steps;
+                return true;
             }
+            return false;
+        };
+
+        let importedCount = 0;
+
+        if (Array.isArray(parsed)) {
+            // Batch import array of patterns
+            parsed.forEach(item => {
+                if (addPatternToLibrary(item)) importedCount++;
+            });
+        } else if (typeof parsed === 'object' && parsed !== null) {
+            // Single pattern import
+            if (addPatternToLibrary(parsed)) importedCount = 1;
         }
+
+        if (importedCount === 0) {
+            throw new Error("No valid patterns found. Each item must have 'name' and 'steps'.");
+        }
+
+        localStorage.setItem('pwm_library', JSON.stringify(library));
+        renderLibrary();
+        document.getElementById('manual-json').value = '';
+        alert(`Successfully imported ${importedCount} pattern(s)!`);
+
+    } catch (e) {
+        alert(e.message || "Invalid JSON syntax.");
+    }
+}
 
         function loadFromLibrary(name) {
             document.getElementById('pattern-name').value = name;
