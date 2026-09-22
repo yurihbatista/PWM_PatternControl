@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWM Studio Dashboard</title>
+    <!-- MQTT.js library from CDN -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --accent: #00adb5; --red: #ff4b2b; --green: #28a745; --text: #eeeeee; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); text-align: center; padding: 15px; margin: 0; }
+        .card { background: var(--card); padding: 15px; border-radius: 12px; margin-bottom: 15px; border: 1px solid #333; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        h2, h3, h4 { margin-top: 0; color: var(--accent); }
+        
+        /* Inputs & Buttons */
+        input, textarea { background: #2a2a2a; color: white; border: 1px solid #444; padding: 10px; border-radius: 8px; margin: 5px; width: calc(100% - 30px); font-size: 14px; }
+        button { background: var(--accent); border: none; color: white; padding: 12px 18px; border-radius: 8px; font-weight: bold; margin: 5px; cursor: pointer; transition: 0.2s; }
+        button:active { transform: scale(0.95); }
+        .btn-stop { background: var(--red); }
+        .btn-save { background: var(--green); }
+        .btn-outline { background: transparent; border: 1px solid #555; color: #aaa; font-size: 12px; }
+
+        /* Pattern Builder */
+        .step-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
+        .step-row input, .step-row select { width: 75px; margin: 0; background: #2a2a2a; color: white; border: 1px solid #444; padding: 10px; border-radius: 8px; font-size: 14px; }
+        .btn-del-step { background: none; color: var(--red); padding: 5px; font-size: 18px; }
+
+        /* Status & Library */
+        .status { font-size: 13px; margin-bottom: 15px; font-weight: bold; color: #ffbc00; }
+        .library-item { display: flex; justify-content: space-between; align-items: center; background: #2a2a2a; padding: 12px; margin: 8px 0; border-radius: 8px; border-left: 4px solid var(--accent); }
+        .library-item span { font-weight: bold; cursor: pointer; flex-grow: 1; text-align: left; margin-left: 10px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="status" class="status">Waiting for configuration...</div>
+
+    <!-- SECTION 1: BROKER SETTINGS -->
+    <div id="settings-ui" class="card">
+        <h3>Broker Settings</h3>
+        <p style="font-size: 12px; color: #888;">Settings are saved locally in your browser.</p>
+        <input type="text" id="cfg-host" placeholder="Cluster ID (e.g., abc-123.s1.eu)">
+        <input type="text" id="cfg-user" placeholder="MQTT Username">
+        <input type="password" id="cfg-pass" placeholder="MQTT Password">
+        <button onclick="saveAndConnect()">SAVE & CONNECT</button>
+    </div>
+
+    <!-- SECTION 2: CONTROLS & STUDIO -->
+    <div id="control-ui" class="hidden">
+        
+        <!-- Quick Actions -->
+        <div class="card">
+            <button onclick="sendCommand('START')">RESUME</button>
+            <button class="btn-stop" onclick="sendCommand('STOP')">STOP</button>
+        </div>
+
+        <!-- Visual Pattern Studio -->
+        <div class="card">
+            <h3>Pattern Studio</h3>
+            <input type="text" id="pattern-name" placeholder="Pattern Name (e.g. Fire Flicker)">
+            <div id="steps-list">
+                <!-- Step rows injected here -->
+            </div>
+            <button onclick="addStepRow()">+ ADD STEP</button>
+            <div style="margin-top:15px; border-top: 1px solid #444; padding-top:15px;">
+                <button class="btn-save" onclick="saveToLibrary()">SAVE TO LIBRARY</button>
+                <button onclick="sendToESP()">SEND TO ESP32</button>
+            </div>
+        </div>
+
+        <!-- Manual JSON Import -->
+        <div class="card">
+            <h3>Manual JSON Import</h3>
+            <textarea id="manual-json" placeholder='Paste JSON here... e.g. {"name":"SOS", "steps":[...] }'></textarea>
+            <button style="background:#6f42c1" onclick="importManualJson()">IMPORT JSON</button>
+        </div>
+
+        <!-- Library -->
+        <div class="card">
+            <h3>Saved Library</h3>
+            <div id="library-container"></div>
+            <p id="empty-msg" style="color:#666; font-size: 12px;">No saved patterns yet.</p>
+        </div>
+
+        <button class="btn-outline" onclick="clearAllData()">Wipe All Data & Logout</button>
+    </div>
+
+    <script>
+        let client = null;
+        let library = JSON.parse(localStorage.getItem('pwm_library')) || {};
+        const topic = 'esp32/pwm_control';
+
+        // Load data on start
+        window.onload = () => {
+            renderLibrary();
+            if(localStorage.getItem('mqtt_host')) {
+                connectToMQTT();
+            } else {
+                addStepRow(500, 1024, 0); // Start with one default row, dir 0
+            }
+        };
+
+        // --- MQTT CONNECTION ---
+        function saveAndConnect() {
+            localStorage.setItem('mqtt_host', document.getElementById('cfg-host').value.trim());
+            localStorage.setItem('mqtt_user', document.getElementById('cfg-user').value.trim());
+            localStorage.setItem('mqtt_pass', document.getElementById('cfg-pass').value.trim());
+            connectToMQTT();
+        }
+
+        function connectToMQTT() {
+            const hostId = localStorage.getItem('mqtt_host');
+            const url = `wss://${hostId}.hivemq.cloud:8884/mqtt`;
+            
+            document.getElementById('status').innerText = 'Connecting to HiveMQ...';
+
+            client = mqtt.connect(url, {
+                username: localStorage.getItem('mqtt_user'),
+                password: localStorage.getItem('mqtt_pass'),
+                clientId: 'pwm_web_' + Math.random().toString(16).substr(2, 6)
+            });
+
+            client.on('connect', () => {
+                document.getElementById('status').innerText = 'Status: Connected ✅';
+                document.getElementById('status').style.color = '#00ff00';
+                document.getElementById('settings-ui').classList.add('hidden');
+                document.getElementById('control-ui').classList.remove('hidden');
+            });
+
+            client.on('error', (err) => {
+                document.getElementById('status').innerText = 'Connection Error ❌';
+                document.getElementById('status').style.color = '#ff4b2b';
+                console.error(err);
+            });
+        }
+
+        function sendCommand(cmd) {
+            client.publish(topic, JSON.stringify({ "cmd": cmd }));
+        }
+
+        // --- PATTERN STUDIO ---
+        function addStepRow(ms = "", duty = "", dir = 0) {
+            const row = document.createElement('div');
+            row.className = 'step-row';
+            row.innerHTML = `
+                <input type="number" class="ms" placeholder="MS" value="${ms}">
+                <input type="number" class="duty" placeholder="Duty" value="${duty}">
+                <select class="dir">
+                    <option value="0" ${dir == 0 ? 'selected' : ''}>Dir 0</option>
+                    <option value="1" ${dir == 1 ? 'selected' : ''}>Dir 1</option>
+                </select>
+                <button class="btn-del-step" onclick="this.parentElement.remove()">×</button>
+            `;
+            document.getElementById('steps-list').appendChild(row);
+        }
+
+        function getPatternFromUI() {
+            const steps = [];
+            const msInputs = document.querySelectorAll('.ms');
+            const dutyInputs = document.querySelectorAll('.duty');
+            const dirInputs = document.querySelectorAll('.dir');
+            
+            msInputs.forEach((el, i) => {
+                if(el.value !== "") {
+                    steps.push({ 
+                        ms: parseInt(el.value), 
+                        duty: parseInt(dutyInputs[i].value),
+                        dir: parseInt(dirInputs[i].value)
+                    });
+                }
+            });
+
+            return {
+                cmd: "SET",
+                name: document.getElementById('pattern-name').value || "Unnamed Pattern",
+                steps: steps
+            };
+        }
+
+        function sendToESP() {
+            const pattern = getPatternFromUI();
+            if(pattern.steps.length === 0) return alert("Add at least one step!");
+            client.publish(topic, JSON.stringify(pattern));
+        }
+
+        // --- LIBRARY LOGIC ---
+        function saveToLibrary() {
+            const pattern = getPatternFromUI();
+            if (pattern.name === "Unnamed Pattern") return alert("Please enter a pattern name!");
+            if (pattern.steps.length === 0) return alert("Pattern is empty!");
+            
+            library[pattern.name] = pattern.steps;
+            localStorage.setItem('pwm_library', JSON.stringify(library));
+            renderLibrary();
+        }
+
+        function importManualJson() {
+            try {
+                const rawInput = document.getElementById('manual-json').value.trim();
+                if (!rawInput) return alert("Please paste JSON first.");
+
+                const parsed = JSON.parse(rawInput);
+                
+                // Helper to import a single pattern object
+                const addPatternToLibrary = (item) => {
+                    if (item.name && Array.isArray(item.steps)) {
+                        library[item.name] = item.steps;
+                        return true;
+                    }
+                    return false;
+                };
+
+                let importedCount = 0;
+
+                if (Array.isArray(parsed)) {
+                    // Batch import array of patterns
+                    parsed.forEach(item => {
+                        if (addPatternToLibrary(item)) importedCount++;
+                    });
+                } else if (typeof parsed === 'object' && parsed !== null) {
+                    // Single pattern import
+                    if (addPatternToLibrary(parsed)) importedCount = 1;
+                }
+
+                if (importedCount === 0) {
+                    throw new Error("No valid patterns found. Each item must have 'name' and 'steps'.");
+                }
+
+                localStorage.setItem('pwm_library', JSON.stringify(library));
+                renderLibrary();
+                document.getElementById('manual-json').value = '';
+                alert(`Successfully imported ${importedCount} pattern(s)!`);
+
+            } catch (e) {
+                alert(e.message || "Invalid JSON syntax.");
+            }
+        }
+
+        function loadFromLibrary(name) {
+            document.getElementById('pattern-name').value = name;
+            document.getElementById('steps-list').innerHTML = '';
+            // Load steps, defaulting to dir 0 if an older pattern doesn't have it
+            library[name].forEach(step => addStepRow(step.ms, step.duty, step.dir || 0));
+        }
+
+        function deletePattern(name) {
+            if(confirm(`Delete "${name}"?`)) {
+                delete library[name];
+                localStorage.setItem('pwm_library', JSON.stringify(library));
+                renderLibrary();
+            }
+        }
+
+        function sendStored(name) {
+            const payload = { cmd: "SET", name: name, steps: library[name] };
+            client.publish(topic, JSON.stringify(payload));
+        }
+
+        function renderLibrary() {
+            const container = document.getElementById('library-container');
+            const names = Object.keys(library);
+            container.innerHTML = '';
+            document.getElementById('empty-msg').className = names.length ? 'hidden' : '';
+
+            names.forEach(name => {
+                const item = document.createElement('div');
+                item.className = 'library-item';
+                item.innerHTML = `
+                    <span onclick="loadFromLibrary('${name}')">${name}</span>
+                    <div>
+                        <button onclick="sendStored('${name}')">SEND</button>
+                        <button class="btn-stop" style="padding:5px 10px; font-size:12px" onclick="deletePattern('${name}')">DEL</button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function clearAllData() {
+            if(confirm("This will log you out and delete ALL saved patterns. Continue?")) {
+                localStorage.clear();
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>
