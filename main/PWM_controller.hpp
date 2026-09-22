@@ -1,6 +1,7 @@
 #ifndef PWM_CONTROLLER
 #define PWM_CONTROLLER
 
+#include <type_traits>
 #include <cstdint>
 #include <stdio.h>
 #include <string>
@@ -16,21 +17,21 @@
 #include "cJSON.h"
 #include "hal/ledc_types.h"
 
-typedef struct
+struct movementData
 {
     uint16_t durationMS;
     uint16_t duty;
     bool dir;
-} movementData;
+};
 
-typedef struct
+struct pwmPattern
 {
     std::string patternName;
     uint16_t patternID;
     std::vector<movementData> patternSequence;
-} pwmPattern;
+};
 
-typedef struct
+struct controllerParameters
 {
     uint8_t Pin_0;
     uint8_t Pin_1;
@@ -41,7 +42,7 @@ typedef struct
         bool h_bridge: 1;
         bool AC_mode: 1;
     } flags;
-} controllerParameters;
+};
 
 
 class PWM_Controller
