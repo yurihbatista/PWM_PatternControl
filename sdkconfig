@@ -3910,6 +3910,10 @@ CONFIG_MQTT_TRANSPORT_WEBSOCKET_SECURE=y
 # default:
 # CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED is not set
 # default:
+# CONFIG_MQTT_BUFFERS_ON_EXTERNAL_MEMORY is not set
+# default:
+# CONFIG_MQTT_TASK_STACK_ON_EXTERNAL_MEMORY is not set
+# default:
 # CONFIG_MQTT_CUSTOM_OUTBOX is not set
 # end of ESP-MQTT Configurations
 # end of Component config
