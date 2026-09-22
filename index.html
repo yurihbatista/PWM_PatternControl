@@ -22,7 +22,7 @@
 
         /* Pattern Builder */
         .step-row { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 8px; }
-        .step-row input { width: 80px; margin: 0; }
+        .step-row input, .step-row select { width: 75px; margin: 0; background: #2a2a2a; color: white; border: 1px solid #444; padding: 10px; border-radius: 8px; font-size: 14px; }
         .btn-del-step { background: none; color: var(--red); padding: 5px; font-size: 18px; }
 
         /* Status & Library */
@@ -97,7 +97,7 @@
             if(localStorage.getItem('mqtt_host')) {
                 connectToMQTT();
             } else {
-                addStepRow(500, 1024); // Start with one default row
+                addStepRow(500, 1024, 0); // Start with one default row, dir 0
             }
         };
 
@@ -140,12 +140,16 @@
         }
 
         // --- PATTERN STUDIO ---
-        function addStepRow(ms = "", duty = "") {
+        function addStepRow(ms = "", duty = "", dir = 0) {
             const row = document.createElement('div');
             row.className = 'step-row';
             row.innerHTML = `
                 <input type="number" class="ms" placeholder="MS" value="${ms}">
                 <input type="number" class="duty" placeholder="Duty" value="${duty}">
+                <select class="dir">
+                    <option value="0" ${dir == 0 ? 'selected' : ''}>Dir 0</option>
+                    <option value="1" ${dir == 1 ? 'selected' : ''}>Dir 1</option>
+                </select>
                 <button class="btn-del-step" onclick="this.parentElement.remove()">×</button>
             `;
             document.getElementById('steps-list').appendChild(row);
@@ -155,10 +159,15 @@
             const steps = [];
             const msInputs = document.querySelectorAll('.ms');
             const dutyInputs = document.querySelectorAll('.duty');
+            const dirInputs = document.querySelectorAll('.dir');
             
             msInputs.forEach((el, i) => {
                 if(el.value !== "") {
-                    steps.push({ ms: parseInt(el.value), duty: parseInt(dutyInputs[i].value) });
+                    steps.push({ 
+                        ms: parseInt(el.value), 
+                        duty: parseInt(dutyInputs[i].value),
+                        dir: parseInt(dirInputs[i].value)
+                    });
                 }
             });
 
@@ -187,51 +196,52 @@
         }
 
         function importManualJson() {
-    try {
-        const rawInput = document.getElementById('manual-json').value.trim();
-        if (!rawInput) return alert("Please paste JSON first.");
+            try {
+                const rawInput = document.getElementById('manual-json').value.trim();
+                if (!rawInput) return alert("Please paste JSON first.");
 
-        const parsed = JSON.parse(rawInput);
-        
-        // Helper to import a single pattern object
-        const addPatternToLibrary = (item) => {
-            if (item.name && Array.isArray(item.steps)) {
-                library[item.name] = item.steps;
-                return true;
+                const parsed = JSON.parse(rawInput);
+                
+                // Helper to import a single pattern object
+                const addPatternToLibrary = (item) => {
+                    if (item.name && Array.isArray(item.steps)) {
+                        library[item.name] = item.steps;
+                        return true;
+                    }
+                    return false;
+                };
+
+                let importedCount = 0;
+
+                if (Array.isArray(parsed)) {
+                    // Batch import array of patterns
+                    parsed.forEach(item => {
+                        if (addPatternToLibrary(item)) importedCount++;
+                    });
+                } else if (typeof parsed === 'object' && parsed !== null) {
+                    // Single pattern import
+                    if (addPatternToLibrary(parsed)) importedCount = 1;
+                }
+
+                if (importedCount === 0) {
+                    throw new Error("No valid patterns found. Each item must have 'name' and 'steps'.");
+                }
+
+                localStorage.setItem('pwm_library', JSON.stringify(library));
+                renderLibrary();
+                document.getElementById('manual-json').value = '';
+                alert(`Successfully imported ${importedCount} pattern(s)!`);
+
+            } catch (e) {
+                alert(e.message || "Invalid JSON syntax.");
             }
-            return false;
-        };
-
-        let importedCount = 0;
-
-        if (Array.isArray(parsed)) {
-            // Batch import array of patterns
-            parsed.forEach(item => {
-                if (addPatternToLibrary(item)) importedCount++;
-            });
-        } else if (typeof parsed === 'object' && parsed !== null) {
-            // Single pattern import
-            if (addPatternToLibrary(parsed)) importedCount = 1;
         }
-
-        if (importedCount === 0) {
-            throw new Error("No valid patterns found. Each item must have 'name' and 'steps'.");
-        }
-
-        localStorage.setItem('pwm_library', JSON.stringify(library));
-        renderLibrary();
-        document.getElementById('manual-json').value = '';
-        alert(`Successfully imported ${importedCount} pattern(s)!`);
-
-    } catch (e) {
-        alert(e.message || "Invalid JSON syntax.");
-    }
-}
 
         function loadFromLibrary(name) {
             document.getElementById('pattern-name').value = name;
             document.getElementById('steps-list').innerHTML = '';
-            library[name].forEach(step => addStepRow(step.ms, step.duty));
+            // Load steps, defaulting to dir 0 if an older pattern doesn't have it
+            library[name].forEach(step => addStepRow(step.ms, step.duty, step.dir || 0));
         }
 
         function deletePattern(name) {
